@@ -127,6 +127,10 @@ class CronService:
                         payload=CronPayload(
                             kind=j["payload"].get("kind", "agent_turn"),
                             message=j["payload"].get("message", ""),
+                            command=j["payload"].get("command", ""),
+                            command_report_prefix=j["payload"].get("commandReportPrefix")
+                                or j["payload"].get("reportPrefix")
+                                or j["payload"].get("report_prefix", ""),
                             deliver=j["payload"].get("deliver", False),
                             channel=j["payload"].get("channel"),
                             to=j["payload"].get("to"),
@@ -261,6 +265,8 @@ class CronService:
                     "payload": {
                         "kind": j.payload.kind,
                         "message": j.payload.message,
+                        "command": j.payload.command,
+                        "commandReportPrefix": j.payload.command_report_prefix,
                         "deliver": j.payload.deliver,
                         "channel": j.payload.channel,
                         "to": j.payload.to,
@@ -486,7 +492,7 @@ class CronService:
         session_key: str | None = None,
         kind: str = "agent_turn",
         command: str = "",
-        report_prefix: str = "",
+        command_report_prefix: str = "",
     ) -> CronJob:
         """Add a new job."""
         _validate_schedule_for_add(schedule)
@@ -501,7 +507,7 @@ class CronService:
                 kind=kind,
                 message=message,
                 command=command,
-                report_prefix=report_prefix,
+                command_report_prefix=command_report_prefix,
                 deliver=deliver,
                 channel=channel,
                 to=to,

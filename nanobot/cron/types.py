@@ -24,7 +24,7 @@ class CronPayload:
     kind: Literal["system_event", "agent_turn", "shell"] = "agent_turn"
     message: str = ""
     command: str = ""  # shell command to execute (for kind="shell")
-    report_prefix: str = ""  # prefix prepended to shell output when reporting through the agent
+    command_report_prefix: str = ""  # prefix prepended to shell output when reporting through the agent
     # Deliver response to channel
     deliver: bool = False
     channel: str | None = None  # e.g. "whatsapp"

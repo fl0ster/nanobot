@@ -853,7 +853,7 @@ def _run_gateway(
 
             # Send shell output through the agent for reporting.
             if job.payload.deliver and job.payload.to and output:
-                prefix = job.payload.report_prefix or (
+                prefix = job.payload.command_report_prefix or (
                     "Report the following shell command output to the user. "
                     "Summarize clearly and speak directly to them."
                 )
