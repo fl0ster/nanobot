@@ -267,6 +267,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("dream", "Run Dream memory consolidation now"),
         BotCommand("dream_log", "Show the latest Dream memory change"),
         BotCommand("dream_restore", "Restore Dream memory to an earlier version"),
+        BotCommand("cron", "List all scheduled cron jobs"),
         BotCommand("help", "Show available commands"),
     ]
 
