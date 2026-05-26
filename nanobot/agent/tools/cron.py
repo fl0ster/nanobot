@@ -24,9 +24,16 @@ _CRON_PARAMETERS = tool_parameters_schema(
         "(e.g., 'weather-monitor', 'daily-standup'). Defaults to first 30 chars of message."
     ),
     message=StringSchema(
-        "REQUIRED when action='add'. Instruction for the agent to execute when the job triggers "
+        "Instruction for the agent to execute when the job triggers "
         "(e.g., 'Send a reminder to WeChat: xxx' or 'Check system status and report'). "
+        "Required when action='add' and command is not set. "
         "Not used for action='list' or action='remove'."
+    ),
+    command=StringSchema(
+        "Shell command to execute directly when the job triggers, bypassing the agent. "
+        "Use this for running scripts or shell commands on a schedule "
+        "(e.g., 'bash /path/to/script.sh' or 'python /path/to/task.py'). "
+        "Mutually exclusive with message — provide one or the other."
     ),
     every_seconds=IntegerSchema(0, description="Interval in seconds (for recurring tasks)"),
     cron_expr=StringSchema("Cron expression like '0 9 * * *' (for scheduled tasks)"),
@@ -45,7 +52,8 @@ _CRON_PARAMETERS = tool_parameters_schema(
     job_id=StringSchema("REQUIRED when action='remove'. Job ID to remove (obtain via action='list')."),
     required=["action"],
     description=(
-        "Action-specific parameters: add requires a non-empty message plus one schedule "
+        "Action-specific parameters: add requires either a non-empty message (agent-executed) "
+        "or a command (shell-executed) plus one schedule "
         "(every_seconds, cron_expr, or at); remove requires job_id; list only needs action. "
         "Per-action requirements are enforced at runtime (see field descriptions) so the "
         "top-level schema stays compatible with providers (e.g. OpenAI Codex/Responses) that "
@@ -125,8 +133,13 @@ class CronTool(Tool, ContextAware):
     def validate_params(self, params: dict[str, Any]) -> list[str]:
         errors = super().validate_params(params)
         action = params.get("action")
-        if action == "add" and not str(params.get("message") or "").strip():
-            errors.append("message is required when action='add'")
+        if action == "add":
+            has_message = bool(str(params.get("message") or "").strip())
+            has_command = bool(str(params.get("command") or "").strip())
+            if not has_message and not has_command:
+                errors.append("either message or command is required when action='add'")
+            if has_message and has_command:
+                errors.append("message and command are mutually exclusive")
         if action == "remove" and not str(params.get("job_id") or "").strip():
             errors.append("job_id is required when action='remove'")
         return errors
@@ -136,6 +149,7 @@ class CronTool(Tool, ContextAware):
         action: str,
         name: str | None = None,
         message: str = "",
+        command: str = "",
         every_seconds: int | None = None,
         cron_expr: str | None = None,
         tz: str | None = None,
@@ -147,7 +161,7 @@ class CronTool(Tool, ContextAware):
         if action == "add":
             if self._in_cron_context.get():
                 return "Error: cannot schedule new jobs from within a cron job execution"
-            return self._add_job(name, message, every_seconds, cron_expr, tz, at, deliver)
+            return self._add_job(name, message, command, every_seconds, cron_expr, tz, at, deliver)
         elif action == "list":
             return self._list_jobs()
         elif action == "remove":
@@ -158,18 +172,23 @@ class CronTool(Tool, ContextAware):
         self,
         name: str | None,
         message: str,
+        command: str,
         every_seconds: int | None,
         cron_expr: str | None,
         tz: str | None,
         at: str | None,
         deliver: bool = True,
     ) -> str:
-        if not message:
+        is_shell = bool(command.strip())
+        if not message and not is_shell:
             return (
-                "Error: cron action='add' requires a non-empty 'message' parameter "
-                "describing what to do when the job triggers "
-                "(e.g. the reminder text). Retry including message=\"...\"."
+                "Error: cron action='add' requires either a non-empty 'message' parameter "
+                "describing what to do when the job triggers, or a 'command' parameter "
+                "with a shell command to execute directly. "
+                "Retry including message=\"...\" or command=\"...\"."
             )
+        if message and is_shell:
+            return "Error: message and command are mutually exclusive — provide one or the other."
         channel = self._channel.get()
         chat_id = self._chat_id.get()
         if not channel or not chat_id:
@@ -207,7 +226,7 @@ class CronTool(Tool, ContextAware):
             return "Error: either every_seconds, cron_expr, or at is required"
 
         job = self._cron.add_job(
-            name=name or message[:30],
+            name=name or (command if is_shell else message)[:30],
             schedule=schedule,
             message=message,
             deliver=deliver,
@@ -216,8 +235,11 @@ class CronTool(Tool, ContextAware):
             delete_after_run=delete_after,
             channel_meta=self._metadata.get(),
             session_key=self._session_key.get() or None,
+            kind="shell" if is_shell else "agent_turn",
+            command=command if is_shell else "",
         )
-        return f"Created job '{job.name}' (id: {job.id})"
+        kind_label = "shell" if is_shell else "agent"
+        return f"Created {kind_label} job '{job.name}' (id: {job.id})"
 
     def _format_timing(self, schedule: CronSchedule) -> str:
         """Format schedule as a human-readable timing string."""
@@ -266,10 +288,13 @@ class CronTool(Tool, ContextAware):
         lines = []
         for j in jobs:
             timing = self._format_timing(j.schedule)
-            parts = [f"- {j.name} (id: {j.id}, {timing})"]
+            kind_tag = f", type: {j.payload.kind}" if j.payload.kind != "agent_turn" else ""
+            parts = [f"- {j.name} (id: {j.id}, {timing}{kind_tag})"]
             if j.payload.kind == "system_event":
                 parts.append(f"  Purpose: {self._system_job_purpose(j)}")
                 parts.append("  Protected: visible for inspection, but cannot be removed.")
+            if j.payload.kind == "shell":
+                parts.append(f"  Command: {j.payload.command}")
             parts.extend(self._format_state(j.state, j.schedule))
             lines.append("\n".join(parts))
         return "Scheduled jobs:\n" + "\n".join(lines)

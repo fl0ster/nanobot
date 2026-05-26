@@ -477,13 +477,15 @@ class CronService:
         self,
         name: str,
         schedule: CronSchedule,
-        message: str,
+        message: str = "",
         deliver: bool = False,
         channel: str | None = None,
         to: str | None = None,
         delete_after_run: bool = False,
         channel_meta: dict | None = None,
         session_key: str | None = None,
+        kind: str = "agent_turn",
+        command: str = "",
     ) -> CronJob:
         """Add a new job."""
         _validate_schedule_for_add(schedule)
@@ -495,8 +497,9 @@ class CronService:
             enabled=True,
             schedule=schedule,
             payload=CronPayload(
-                kind="agent_turn",
+                kind=kind,
                 message=message,
+                command=command,
                 deliver=deliver,
                 channel=channel,
                 to=to,

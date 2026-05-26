@@ -819,6 +819,44 @@ def _run_gateway(
                 logger.exception("Dream cron job failed")
             return None
 
+        # Shell jobs — execute command directly, bypass the agent.
+        if job.payload.kind == "shell":
+            import asyncio as _asyncio
+
+            cmd = job.payload.command
+            logger.info("Cron shell job '{}': executing: {}", job.name, cmd)
+            try:
+                proc = await _asyncio.create_subprocess_shell(
+                    cmd,
+                    stdout=_asyncio.subprocess.PIPE,
+                    stderr=_asyncio.subprocess.STDOUT,
+                )
+                stdout, _ = await proc.communicate()
+                output = stdout.decode("utf-8", errors="replace").strip() if stdout else ""
+                if proc.returncode == 0:
+                    logger.info("Cron shell job '{}' succeeded (exit 0)", job.name)
+                else:
+                    logger.warning(
+                        "Cron shell job '{}' exited with code {}: {}",
+                        job.name, proc.returncode, output[:200],
+                    )
+
+                if job.payload.deliver and job.payload.to and output:
+                    await _deliver_to_channel(
+                        OutboundMessage(
+                            channel=job.payload.channel or "cli",
+                            chat_id=job.payload.to,
+                            content=output,
+                            metadata=dict(job.payload.channel_meta),
+                        ),
+                        record=True,
+                        session_key=job.payload.session_key,
+                    )
+                return output or f"exit {proc.returncode}"
+            except Exception as exc:
+                logger.exception("Cron shell job '{}' failed", job.name)
+                return f"Error: {exc}"
+
         from nanobot.utils.evaluator import evaluate_response
 
         reminder_note = (
