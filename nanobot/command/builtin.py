@@ -99,6 +99,12 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "undo-2",
     ),
     BuiltinCommandSpec(
+        "/cron",
+        "Show cron jobs",
+        "List all scheduled cron jobs.",
+        "clock",
+    ),
+    BuiltinCommandSpec(
         "/help",
         "Show help",
         "List available slash commands.",
@@ -607,6 +613,68 @@ async def cmd_pairing(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+def _format_schedule(schedule) -> str:
+    """Return a human-readable schedule description."""
+    if schedule.kind == "cron" and schedule.expr:
+        tz = f" ({schedule.tz})" if schedule.tz else ""
+        return f"cron `{schedule.expr}`{tz}"
+    if schedule.kind == "every" and schedule.every_ms:
+        secs = schedule.every_ms / 1000
+        if secs >= 86400:
+            return f"every {secs / 86400:.4g}d"
+        if secs >= 3600:
+            return f"every {secs / 3600:.4g}h"
+        if secs >= 60:
+            return f"every {secs / 60:.4g}m"
+        return f"every {secs:.4g}s"
+    if schedule.kind == "at" and schedule.at_ms:
+        from datetime import datetime, timezone
+
+        dt = datetime.fromtimestamp(schedule.at_ms / 1000, tz=timezone.utc)
+        return f"once at {dt:%Y-%m-%d %H:%M UTC}"
+    return schedule.kind
+
+
+def _format_cron_list(jobs) -> str:
+    """Format the cron job list for display."""
+    if not jobs:
+        return "No cron jobs scheduled."
+    lines = ["## Cron Jobs", ""]
+    for job in jobs:
+        status = "enabled" if job.enabled else "disabled"
+        sched = _format_schedule(job.schedule)
+        kind = job.payload.kind
+        detail = ""
+        if kind == "shell" and job.payload.command:
+            detail = f" — `{job.payload.command}`"
+        elif kind == "agent_turn" and job.payload.message:
+            msg = job.payload.message
+            if len(msg) > 80:
+                msg = msg[:77] + "..."
+            detail = f" — {msg}"
+        lines.append(f"- **{job.name}** (`{job.id}`) [{status}] {sched} [{kind}]{detail}")
+    return "\n".join(lines)
+
+
+async def cmd_cron(ctx: CommandContext) -> OutboundMessage:
+    """List all scheduled cron jobs."""
+    cron = ctx.loop.cron_service
+    if cron is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Cron service is not available (only active in gateway mode).",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+    jobs = cron.list_jobs(include_disabled=True)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=_format_cron_list(jobs),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
@@ -646,6 +714,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/dream-log ", cmd_dream_log)
     router.exact("/dream-restore", cmd_dream_restore)
     router.prefix("/dream-restore ", cmd_dream_restore)
+    router.exact("/cron", cmd_cron)
     router.exact("/help", cmd_help)
     router.exact("/pairing", cmd_pairing)
     router.prefix("/pairing ", cmd_pairing)
