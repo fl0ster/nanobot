@@ -105,6 +105,13 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "clock",
     ),
     BuiltinCommandSpec(
+        "/cron-test",
+        "Test cron job",
+        "Manually trigger a cron job by name.",
+        "play",
+        "<job name>",
+    ),
+    BuiltinCommandSpec(
         "/help",
         "Show help",
         "List available slash commands.",
@@ -675,6 +682,55 @@ async def cmd_cron(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_cron_test(ctx: CommandContext) -> OutboundMessage:
+    """Manually trigger a cron job by name."""
+    cron = ctx.loop.cron_service
+    metadata = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    if cron is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Cron service is not available (only active in gateway mode).",
+            metadata=metadata,
+        )
+    name = ctx.args.strip()
+    if not name:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Usage: `/cron-test <job name>`",
+            metadata=metadata,
+        )
+    jobs = cron.list_jobs(include_disabled=True)
+    match = next((j for j in jobs if j.name == name), None)
+    if match is None:
+        available = ", ".join(f"`{j.name}`" for j in jobs) or "(none)"
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"No cron job named `{name}`.\n\nAvailable jobs: {available}",
+            metadata=metadata,
+        )
+
+    async def _run():
+        try:
+            ok = await cron.run_job(match.id, force=True)
+            if ok:
+                content = f"Cron job `{match.name}` completed."
+            else:
+                content = f"Cron job `{match.name}` could not be executed."
+        except Exception as e:
+            content = f"Cron job `{match.name}` failed: {e}"
+        await ctx.loop.bus.publish_outbound(OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=content, metadata=metadata,
+        ))
+
+    asyncio.create_task(_run())
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=f"Running cron job `{match.name}` (`{match.id}`)...",
+        metadata=metadata,
+    )
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
@@ -715,6 +771,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/dream-restore", cmd_dream_restore)
     router.prefix("/dream-restore ", cmd_dream_restore)
     router.exact("/cron", cmd_cron)
+    router.exact("/cron-test", cmd_cron_test)
+    router.prefix("/cron-test ", cmd_cron_test)
     router.exact("/help", cmd_help)
     router.exact("/pairing", cmd_pairing)
     router.prefix("/pairing ", cmd_pairing)

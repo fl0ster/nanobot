@@ -268,13 +268,14 @@ class TelegramChannel(BaseChannel):
         BotCommand("dream_log", "Show the latest Dream memory change"),
         BotCommand("dream_restore", "Restore Dream memory to an earlier version"),
         BotCommand("cron", "List all scheduled cron jobs"),
+        BotCommand("cron_test", "Manually trigger a cron job by name"),
         BotCommand("help", "Show available commands"),
     ]
 
     # Regex for slash commands routed to AgentLoop via ``_forward_command``.
     # Hyphenated ``dream-*`` commands stay on a separate handler (below).
     TELEGRAM_BUS_SLASH_COMMAND_RE = re.compile(
-        r"^/(?:new|stop|restart|status|dream|history|goal|pairing|model)(?:@\w+)?(?:\s+.*)?$"
+        r"^/(?:new|stop|restart|status|dream|history|goal|pairing|model|cron)(?:@\w+)?(?:\s+.*)?$"
     )
 
     @classmethod
@@ -324,6 +325,8 @@ class TelegramChannel(BaseChannel):
             return content.replace("/dream_log", "/dream-log", 1)
         if content == "/dream_restore" or content.startswith("/dream_restore "):
             return content.replace("/dream_restore", "/dream-restore", 1)
+        if content == "/cron_test" or content.startswith("/cron_test "):
+            return content.replace("/cron_test", "/cron-test", 1)
         return content
 
     async def start(self) -> None:
@@ -370,7 +373,7 @@ class TelegramChannel(BaseChannel):
         )
         self._app.add_handler(
             MessageHandler(
-                filters.Regex(r"^/(dream-log|dream_log|dream-restore|dream_restore)(?:@\w+)?(?:\s+.*)?$"),
+                filters.Regex(r"^/(dream-log|dream_log|dream-restore|dream_restore|cron-test|cron_test)(?:@\w+)?(?:\s+.*)?$"),
                 self._forward_command,
             )
         )
