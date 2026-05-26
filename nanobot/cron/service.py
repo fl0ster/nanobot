@@ -486,6 +486,7 @@ class CronService:
         session_key: str | None = None,
         kind: str = "agent_turn",
         command: str = "",
+        report_prefix: str = "",
     ) -> CronJob:
         """Add a new job."""
         _validate_schedule_for_add(schedule)
@@ -500,6 +501,7 @@ class CronService:
                 kind=kind,
                 message=message,
                 command=command,
+                report_prefix=report_prefix,
                 deliver=deliver,
                 channel=channel,
                 to=to,

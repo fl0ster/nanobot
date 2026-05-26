@@ -808,6 +808,11 @@ def _run_gateway(
         message_tool.set_send_callback(_deliver_to_channel)
 
     # Set cron callback (needs agent)
+    from nanobot.utils.evaluator import evaluate_response
+
+    async def _silent(*_args, **_kwargs):
+        pass
+
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
         # Dream is an internal job — run directly, not through the agent loop.
@@ -819,11 +824,12 @@ def _run_gateway(
                 logger.exception("Dream cron job failed")
             return None
 
-        # Shell jobs — execute command directly, bypass the agent.
+        # Shell jobs — execute command, then report through the agent.
         if job.payload.kind == "shell":
             import asyncio as _asyncio
 
             cmd = job.payload.command
+            exit_code: int | str = "N/A"
             logger.info("Cron shell job '{}': executing: {}", job.name, cmd)
             try:
                 proc = await _asyncio.create_subprocess_shell(
@@ -832,32 +838,80 @@ def _run_gateway(
                     stderr=_asyncio.subprocess.STDOUT,
                 )
                 stdout, _ = await proc.communicate()
+                exit_code = proc.returncode
                 output = stdout.decode("utf-8", errors="replace").strip() if stdout else ""
-                if proc.returncode == 0:
+                if exit_code == 0:
                     logger.info("Cron shell job '{}' succeeded (exit 0)", job.name)
                 else:
                     logger.warning(
                         "Cron shell job '{}' exited with code {}: {}",
-                        job.name, proc.returncode, output[:200],
+                        job.name, exit_code, output[:200],
                     )
-
-                if job.payload.deliver and job.payload.to and output:
-                    await _deliver_to_channel(
-                        OutboundMessage(
-                            channel=job.payload.channel or "cli",
-                            chat_id=job.payload.to,
-                            content=output,
-                            metadata=dict(job.payload.channel_meta),
-                        ),
-                        record=True,
-                        session_key=job.payload.session_key,
-                    )
-                return output or f"exit {proc.returncode}"
             except Exception as exc:
                 logger.exception("Cron shell job '{}' failed", job.name)
-                return f"Error: {exc}"
+                output = f"Error: {exc}"
 
-        from nanobot.utils.evaluator import evaluate_response
+            # Send shell output through the agent for reporting.
+            if job.payload.deliver and job.payload.to and output:
+                prefix = job.payload.report_prefix or (
+                    "Report the following shell command output to the user. "
+                    "Summarize clearly and speak directly to them."
+                )
+                report_prompt = (
+                    f"{prefix}\n\n"
+                    f"Command: {cmd}\n"
+                    f"Exit code: {exit_code}\n"
+                    f"Output:\n{output}"
+                )
+
+                cron_tool = agent.tools.get("cron")
+                cron_token = None
+                if isinstance(cron_tool, CronTool):
+                    cron_token = cron_tool.set_cron_context(True)
+
+                message_record_token = None
+                if isinstance(message_tool, MessageTool):
+                    message_record_token = message_tool.set_record_channel_delivery(True)
+
+                try:
+                    resp = await agent.process_direct(
+                        report_prompt,
+                        session_key=f"cron:{job.id}",
+                        channel=job.payload.channel or "cli",
+                        chat_id=job.payload.to or "direct",
+                        on_progress=_silent,
+                    )
+                finally:
+                    if isinstance(cron_tool, CronTool) and cron_token is not None:
+                        cron_tool.reset_cron_context(cron_token)
+                    if isinstance(message_tool, MessageTool) and message_record_token is not None:
+                        message_tool.reset_record_channel_delivery(message_record_token)
+
+                response = resp.content if resp else ""
+
+                # If the agent already sent via the message tool, skip duplicate delivery.
+                if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
+                    return response or output
+
+                if response:
+                    should_notify = await evaluate_response(
+                        response, report_prompt, agent.provider, agent.model,
+                    )
+                    if should_notify:
+                        await _deliver_to_channel(
+                            OutboundMessage(
+                                channel=job.payload.channel or "cli",
+                                chat_id=job.payload.to,
+                                content=response,
+                                metadata=dict(job.payload.channel_meta),
+                            ),
+                            record=True,
+                            session_key=job.payload.session_key,
+                        )
+
+                return response or output
+
+            return output or f"exit {exit_code}"
 
         reminder_note = (
             "The scheduled time has arrived. Deliver this reminder to the user now, "
@@ -871,9 +925,6 @@ def _run_gateway(
         cron_token = None
         if isinstance(cron_tool, CronTool):
             cron_token = cron_tool.set_cron_context(True)
-
-        async def _silent(*_args, **_kwargs):
-            pass
 
         message_record_token = None
         if isinstance(message_tool, MessageTool):

@@ -30,10 +30,16 @@ _CRON_PARAMETERS = tool_parameters_schema(
         "Not used for action='list' or action='remove'."
     ),
     command=StringSchema(
-        "Shell command to execute directly when the job triggers, bypassing the agent. "
+        "Shell command to execute directly when the job triggers. "
+        "After execution, the output is sent through the agent for reporting. "
         "Use this for running scripts or shell commands on a schedule "
         "(e.g., 'bash /path/to/script.sh' or 'python /path/to/task.py'). "
         "Mutually exclusive with message — provide one or the other."
+    ),
+    report_prefix=StringSchema(
+        "Prefix prepended to shell command output before sending it through the agent "
+        "for reporting (e.g., 'Summarize this health check:' or 'Report these metrics to the user:'). "
+        "Only used with command (shell jobs). Defaults to a generic reporting instruction."
     ),
     every_seconds=IntegerSchema(0, description="Interval in seconds (for recurring tasks)"),
     cron_expr=StringSchema("Cron expression like '0 9 * * *' (for scheduled tasks)"),
@@ -150,6 +156,7 @@ class CronTool(Tool, ContextAware):
         name: str | None = None,
         message: str = "",
         command: str = "",
+        report_prefix: str = "",
         every_seconds: int | None = None,
         cron_expr: str | None = None,
         tz: str | None = None,
@@ -161,7 +168,7 @@ class CronTool(Tool, ContextAware):
         if action == "add":
             if self._in_cron_context.get():
                 return "Error: cannot schedule new jobs from within a cron job execution"
-            return self._add_job(name, message, command, every_seconds, cron_expr, tz, at, deliver)
+            return self._add_job(name, message, command, report_prefix, every_seconds, cron_expr, tz, at, deliver)
         elif action == "list":
             return self._list_jobs()
         elif action == "remove":
@@ -173,6 +180,7 @@ class CronTool(Tool, ContextAware):
         name: str | None,
         message: str,
         command: str,
+        report_prefix: str,
         every_seconds: int | None,
         cron_expr: str | None,
         tz: str | None,
@@ -237,6 +245,7 @@ class CronTool(Tool, ContextAware):
             session_key=self._session_key.get() or None,
             kind="shell" if is_shell else "agent_turn",
             command=command if is_shell else "",
+            report_prefix=report_prefix if is_shell else "",
         )
         kind_label = "shell" if is_shell else "agent"
         return f"Created {kind_label} job '{job.name}' (id: {job.id})"
@@ -295,6 +304,8 @@ class CronTool(Tool, ContextAware):
                 parts.append("  Protected: visible for inspection, but cannot be removed.")
             if j.payload.kind == "shell":
                 parts.append(f"  Command: {j.payload.command}")
+                if j.payload.report_prefix:
+                    parts.append(f"  Report prefix: {j.payload.report_prefix}")
             parts.extend(self._format_state(j.state, j.schedule))
             lines.append("\n".join(parts))
         return "Scheduled jobs:\n" + "\n".join(lines)
